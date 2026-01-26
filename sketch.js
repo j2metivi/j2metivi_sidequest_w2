@@ -1,238 +1,236 @@
+let showHitbox = false;
+
 // Y-position of the floor (ground level)
 let floorY3;
 
 // Player character (soft, animated blob)
 let blob3 = {
-  // Position (centre of the blob)
   x: 80,
   y: 0,
 
-  // Visual properties
-  r: 26, // Base radius
-  points: 48, // Number of points used to draw the blob
-  wobble: 7, // Edge deformation amount
+  r: 26,
+  points: 48,
+  wobble: 6,
   wobbleFreq: 0.9,
 
-  // Time values for breathing animation
   t: 0,
-  tSpeed: 0.01,
+  tSpeed: 0.012,
 
-  // Physics: velocity
-  vx: 0, // Horizontal velocity
-  vy: 0, // Vertical velocity
+  vx: 0,
+  vy: 0,
 
-  // Movement tuning
-  accel: 0.55, // Horizontal acceleration
-  maxRun: 4.0, // Maximum horizontal speed
-  gravity: 0.65, // Downward force
-  jumpV: -11.0, // Initial jump impulse
+  accel: 0.55,
+  maxRun: 4.0,
+  gravity: 0.65,
+  jumpV: -11.0,
 
-  // State
-  onGround: false, // True when standing on a platform
+  onGround: false,
 
-  // Friction
-  frictionAir: 0.995, // Light friction in air
-  frictionGround: 0.88, // Stronger friction on ground
+  frictionAir: 0.995,
+  frictionGround: 0.88,
 };
 
-// List of solid platforms the blob can stand on
-// Each platform is an axis-aligned rectangle (AABB)
 let platforms = [];
 
 // --- FEAR SYSTEM (Package A) ---
 let panic = 0; // 0 calm → 1 terrified
-let safeLights = []; // positions of "safe" light pools
-let shadows = []; // background silhouettes
+let safeLights = [];
+let shadows = [];
 
 function setup() {
   createCanvas(640, 360);
-
-  // Define the floor height
   floorY3 = height - 36;
 
   noStroke();
   textFont("sans-serif");
   textSize(14);
 
-  // Create platforms (floor + steps)
   platforms = [
-    { x: 0, y: floorY3, w: width, h: height - floorY3 }, // floor
-    { x: 120, y: floorY3 - 70, w: 120, h: 12 }, // low step
-    { x: 300, y: floorY3 - 120, w: 90, h: 12 }, // mid step
-    { x: 440, y: floorY3 - 180, w: 130, h: 12 }, // high step
-    { x: 520, y: floorY3 - 70, w: 90, h: 12 }, // return ramp
+    { x: 0, y: floorY3, w: width, h: height - floorY3, isFloor: true }, // floor
+    { x: 120, y: floorY3 - 70, w: 120, h: 12 },
+    { x: 300, y: floorY3 - 120, w: 90, h: 12 },
+    { x: 440, y: floorY3 - 180, w: 130, h: 12 },
+    { x: 520, y: floorY3 - 70, w: 90, h: 12 },
   ];
 
-  // Start the blob resting on the floor
   blob3.y = floorY3 - blob3.r - 1;
 
-  // Safe light pools (calm zones)
+  // Visible safe light pools (these are what create “light areas”)
   safeLights = [
-    { x: 80, y: floorY3 - 40, r: 120 },
-    { x: 320, y: floorY3 - 140, r: 110 },
-    { x: 560, y: floorY3 - 80, r: 120 },
+    { x: 80, y: floorY3 - 40, r: 130 },
+    { x: 320, y: floorY3 - 140, r: 120 },
+    { x: 560, y: floorY3 - 80, r: 130 },
   ];
 
-  // Drifting background shadows (unease in the dark)
   for (let i = 0; i < 8; i++) {
     shadows.push({
       x: random(width),
       y: random(height),
-      r: random(30, 90),
-      vx: random(0.2, 0.8) * random([-1, 1]),
+      r: random(40, 120),
+      vx: random(0.15, 0.55) * random([-1, 1]),
       phase: random(1000),
     });
   }
 }
 
 function draw() {
-  background(240);
+  // Base “dark world”
+  background(18);
 
-  // --- FEAR: compute how "safe" we are (distance to nearest light) ---
+  // Shadows first (behind everything)
+  drawShadows();
+
+  // Draw visible light pools (THIS makes light/dark readable)
+  drawLightPools();
+
+  // Panic = how far outside light pools the blob is
   let nearest = 99999;
   for (const L of safeLights) {
     const d = dist(blob3.x, blob3.y, L.x, L.y) - L.r;
     nearest = min(nearest, d);
   }
-  // nearest < 0 means inside a safe light pool
-  let darkness = constrain(map(nearest, -60, 220, 0, 1), 0, 1);
+  // nearest < 0 means you're in light
+  let darkness = constrain(map(nearest, -60, 260, 0, 1), 0, 1);
+  panic = lerp(panic, darkness, 0.05);
 
-  // Panic rises in darkness, calms in light
-  panic = lerp(panic, darkness, 0.04);
+  // Panic-driven animation tuning (keep wobble reasonable)
+  blob3.tSpeed = lerp(0.012, 0.05, panic);
+  blob3.wobble = lerp(5, 9, panic);
+  blob3.wobbleFreq = lerp(0.9, 1.5, panic);
 
-  // --- Draw all platforms (base layer) ---
-  fill(200);
-  for (const p of platforms) {
-    rect(p.x, p.y, p.w, p.h);
-  }
+  // --- Draw platforms (slightly dim so lights stand out) ---
+  fill(70);
+  for (const p of platforms) rect(p.x, p.y, p.w, p.h);
 
-  // --- Input: left/right movement ---
+  // --- Input ---
   let move = 0;
-  if (keyIsDown(65) || keyIsDown(LEFT_ARROW)) move -= 1; // A or ←
-  if (keyIsDown(68) || keyIsDown(RIGHT_ARROW)) move += 1; // D or →
-  // Skittish acceleration (fear makes inputs feel jerky)
-  let skittishBoost = 1 + 0.6 * panic;
+  if (keyIsDown(65) || keyIsDown(LEFT_ARROW)) move -= 1;
+  if (keyIsDown(68) || keyIsDown(RIGHT_ARROW)) move += 1;
+
+  // Skittish acceleration: fear makes the first push a bit sharper
+  let skittishBoost = 1 + 0.5 * panic;
   blob3.vx += blob3.accel * move * skittishBoost;
 
-  // Tremble when grounded + scared (tiny involuntary shake)
+  // Tremble when grounded + scared (small involuntary shake)
   if (blob3.onGround && panic > 0.15) {
-    blob3.vx += (noise(frameCount * 0.2) - 0.5) * 0.35 * panic;
+    blob3.vx += (noise(frameCount * 0.25) - 0.5) * 0.28 * panic;
   }
 
-  // --- Apply friction and clamp speed (panic affects control) ---
-  let fearFriction = lerp(1.0, 0.94, panic); // lower = more slide
+  // Fear slightly reduces control (more slide) + slightly reduces top speed
+  let fearFriction = lerp(1.0, 0.95, panic);
   blob3.vx *=
     (blob3.onGround ? blob3.frictionGround : blob3.frictionAir) * fearFriction;
 
-  let fearMaxRun = lerp(blob3.maxRun, blob3.maxRun * 0.82, panic);
+  let fearMaxRun = lerp(blob3.maxRun, blob3.maxRun * 0.85, panic);
   blob3.vx = constrain(blob3.vx, -fearMaxRun, fearMaxRun);
 
-  // --- Apply gravity ---
+  // Gravity
   blob3.vy += blob3.gravity;
 
-  // --- Collision representation ---
-  // We collide using a rectangle (AABB),
-  // even though the blob is drawn as a circle
+  // --- IMPORTANT FIX: collision radius matches visual blob size ---
+  // The blob is drawn up to (r + wobble), so collide using that.
+  // Hitbox tuned to match perceived size (not max wobble)
+  let collisionR = blob3.r;
+
   let box = {
-    x: blob3.x - blob3.r,
-    y: blob3.y - blob3.r,
-    w: blob3.r * 2,
-    h: blob3.r * 2,
+    x: blob3.x - collisionR,
+    y: blob3.y - collisionR,
+    w: collisionR * 2,
+    h: collisionR * 2,
   };
 
-  // --- STEP 1: Move horizontally, then resolve X collisions ---
+  // Move X + resolve (skip floor so it doesn't act like a side wall)
   box.x += blob3.vx;
   for (const s of platforms) {
+    if (s.isFloor) continue;
     if (overlap(box, s)) {
-      if (blob3.vx > 0) {
-        // Moving right → hit the left side of a platform
-        box.x = s.x - box.w;
-      } else if (blob3.vx < 0) {
-        // Moving left → hit the right side of a platform
-        box.x = s.x + s.w;
-      }
+      if (blob3.vx > 0) box.x = s.x - box.w;
+      else if (blob3.vx < 0) box.x = s.x + s.w;
       blob3.vx = 0;
     }
   }
 
-  // --- STEP 2: Move vertically, then resolve Y collisions ---
+  // Move Y + resolve
   box.y += blob3.vy;
   blob3.onGround = false;
 
   for (const s of platforms) {
     if (overlap(box, s)) {
       if (blob3.vy > 0) {
-        // Falling → land on top of a platform
         box.y = s.y - box.h;
         blob3.vy = 0;
         blob3.onGround = true;
       } else if (blob3.vy < 0) {
-        // Rising → hit the underside of a platform
         box.y = s.y + s.h;
         blob3.vy = 0;
       }
     }
   }
 
-  // --- Convert collision box back to blob centre ---
+  // Safety clamp: never allow box to remain inside the floor
+  box.y = min(box.y, floorY3 - box.h);
+
+  // Convert back to center position
   blob3.x = box.x + box.w / 2;
   blob3.y = box.y + box.h / 2;
+  // DEBUG: draw hitbox (press H to toggle)
+  if (showHitbox) {
+    push();
+    noFill();
+    stroke(255, 0, 0);
+    rect(box.x, box.y, box.w, box.h);
+    pop();
+    noStroke();
+  }
 
-  // Keep blob inside the canvas horizontally
-  blob3.x = constrain(blob3.x, blob3.r, width - blob3.r);
+  // Keep inside canvas horizontally using collision radius
+  blob3.x = constrain(blob3.x, collisionR, width - collisionR);
 
-  // --- Panic-driven animation: faster breathing + more wobble ---
-  blob3.tSpeed = lerp(0.01, 0.05, panic);
-  blob3.wobble = lerp(7, 14, panic);
-  blob3.wobbleFreq = lerp(0.9, 1.6, panic);
-
-  // --- Draw the animated blob ---
+  // Draw blob
   blob3.t += blob3.tSpeed;
-  drawBlobCircle(blob3);
+  drawBlobCircle(blob3, panic);
 
-  // --- HUD ---
-  fill(0);
+  // Optional vignette (adds tension without killing the light pools)
+  drawVignette();
+
+  // HUD
+  fill(220);
   text("Move: A/D or ←/→  •  Jump: Space/W/↑", 10, 18);
   text("Stay in light to calm down. Darkness increases panic.", 10, 36);
-
-  // --- Fear environment overlay (draw last) ---
-  drawShadows();
-  drawSpotlight();
 }
 
-// Axis-Aligned Bounding Box (AABB) overlap test
-// Returns true if rectangles a and b intersect
+// AABB overlap
 function overlap(a, b) {
   return (
     a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
   );
 }
 
-// Draws the blob using Perlin noise for a soft, breathing effect
-function drawBlobCircle(b) {
-  fill(20, 120, 255);
-  beginShape();
+// Blob drawing (color shifts slightly with panic)
+function drawBlobCircle(b, panicAmt) {
+  // More fear = less saturated / paler
+  let baseR = lerp(30, 200, 1 - panicAmt);
+  let baseG = lerp(120, 210, 1 - panicAmt);
+  let baseB = lerp(255, 230, 1 - panicAmt);
+  fill(baseR, baseG, baseB);
 
+  beginShape();
   for (let i = 0; i < b.points; i++) {
     const a = (i / b.points) * TAU;
-
-    // Noise-based radius offset
     const n = noise(
       cos(a) * b.wobbleFreq + 100,
       sin(a) * b.wobbleFreq + 100,
       b.t,
     );
-
     const r = b.r + map(n, 0, 1, -b.wobble, b.wobble);
-
     vertex(b.x + cos(a) * r, b.y + sin(a) * r);
   }
-
   endShape(CLOSE);
 }
 
-// Jump input (only allowed when grounded)
 function keyPressed() {
+  if (key === "h" || key === "H") showHitbox = !showHitbox;
+
   if (
     (key === " " || key === "W" || key === "w" || keyCode === UP_ARROW) &&
     blob3.onGround
@@ -242,42 +240,48 @@ function keyPressed() {
   }
 }
 
-// --- Fear ambience: drifting silhouettes ---
+// Drift silhouettes (subtle fear texture)
 function drawShadows() {
   push();
   noStroke();
   for (const s of shadows) {
     s.x += s.vx;
-    if (s.x < -100) s.x = width + 100;
-    if (s.x > width + 100) s.x = -100;
+    if (s.x < -150) s.x = width + 150;
+    if (s.x > width + 150) s.x = -150;
 
-    // shadow "breath"
-    let rr = s.r + sin(frameCount * 0.02 + s.phase) * 8;
-
-    // darker when panic is high
-    fill(0, 30 + 120 * panic);
+    let rr = s.r + sin(frameCount * 0.02 + s.phase) * 10;
+    fill(0, 50);
     ellipse(s.x, s.y, rr * 1.2, rr);
   }
   pop();
 }
 
-// --- Fear ambience: darkness overlay + spotlight around blob ---
-function drawSpotlight() {
+// Visible light pools (so you clearly see safe zones)
+function drawLightPools() {
   push();
+  noStroke();
+  for (const L of safeLights) {
+    // Draw a simple radial glow using layered circles
+    for (let i = 12; i >= 1; i--) {
+      let t = i / 12;
+      let rr = L.r * (1.0 + (1 - t) * 0.25);
+      let alpha = 18 * t;
+      fill(255, 240, 200, alpha);
+      ellipse(L.x, L.y, rr * 2, rr * 2);
+    }
 
-  // Dark overlay
-  fill(0, 170 * (0.35 + 0.65 * panic)); // darker as fear rises
+    // bright core
+    fill(255, 245, 210, 55);
+    ellipse(L.x, L.y, L.r * 0.9, L.r * 0.9);
+  }
+  pop();
+}
+
+// Vignette that strengthens with panic (doesn't erase lights)
+function drawVignette() {
+  push();
+  noStroke();
+  fill(0, 90 * panic);
   rect(0, 0, width, height);
-
-  // Cut a hole out of the darkness
-  erase();
-  let r = lerp(160, 90, panic); // spotlight shrinks when scared
-  ellipse(blob3.x, blob3.y, r * 2, r * 2);
-  noErase();
-
-  // Extra vignette feel
-  fill(0, 60 * panic);
-  rect(0, 0, width, height);
-
   pop();
 }
